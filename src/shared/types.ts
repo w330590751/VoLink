@@ -32,7 +32,38 @@ export type DeviceStatus = {
   simState: string
   registration: string
   firmware: string
+  rsrp?: number
+  rsrq?: number
+  sinr?: number
+  channel?: string
+  packetService?: string
   updatedAt: string
+}
+
+export type DiagnosticCheck = {
+  id: string
+  label: string
+  state: 'pass' | 'warning' | 'error' | 'unknown'
+  value: string
+  suggestion?: string
+}
+
+export type DeviceDiagnostics = {
+  deviceId: string
+  generatedAt: string
+  summary: 'healthy' | 'attention' | 'offline'
+  checks: DiagnosticCheck[]
+  raw: Record<string, string>
+}
+
+export type UpdateInfo = {
+  currentVersion: string
+  latestVersion: string
+  available: boolean
+  releaseUrl: string
+  downloadUrl?: string
+  publishedAt?: string
+  checkedAt: string
 }
 
 export type DeviceRecord = {
@@ -226,6 +257,7 @@ export interface VoLinkAPI {
   setFlightMode(deviceId: string, enabled: boolean): Promise<boolean>
   scanOperators(deviceId: string): Promise<string[]>
   selectOperator(deviceId: string, plmn?: string): Promise<boolean>
+  diagnoseDevice(deviceId: string): Promise<DeviceDiagnostics>
   sendSMS(deviceId: string, recipient: string, body: string): Promise<SmsMessage>
   refreshSMS(deviceId: string): Promise<SmsMessage[]>
   deleteSMS(id: string): Promise<boolean>
@@ -243,5 +275,7 @@ export interface VoLinkAPI {
   deleteEsim(id: string): Promise<boolean>
   updateSettings(settings: Partial<AppSettings>): Promise<AppSettings>
   testNotification(): Promise<boolean>
+  checkForUpdates(): Promise<UpdateInfo>
+  openExternal(url: string): Promise<boolean>
   listPorts(): Promise<SerialPortDescriptor[]>
 }

@@ -14,6 +14,7 @@ const api: VoLinkAPI = {
   setFlightMode: (id, enabled) => ipcRenderer.invoke('device:flight-mode', id, enabled),
   scanOperators: id => ipcRenderer.invoke('device:operators-scan', id),
   selectOperator: (id, plmn) => ipcRenderer.invoke('device:operator-select', id, plmn),
+  diagnoseDevice: id => ipcRenderer.invoke('device:diagnose', id),
   listPorts: () => ipcRenderer.invoke('device:list-ports'),
   sendSMS: (deviceId, recipient, body) => ipcRenderer.invoke('sms:send', deviceId, recipient, body),
   refreshSMS: deviceId => ipcRenderer.invoke('sms:refresh', deviceId),
@@ -31,7 +32,9 @@ const api: VoLinkAPI = {
   disableEsim: id => ipcRenderer.invoke('esim:disable', id),
   deleteEsim: id => ipcRenderer.invoke('esim:delete', id),
   updateSettings: settings => ipcRenderer.invoke('settings:update', settings),
-  testNotification: () => ipcRenderer.invoke('settings:test-notification')
+  testNotification: () => ipcRenderer.invoke('settings:test-notification'),
+  checkForUpdates: () => ipcRenderer.invoke('app:check-update'),
+  openExternal: url => ipcRenderer.invoke('app:open-external', url)
 }
 
 contextBridge.exposeInMainWorld('voLink', api)

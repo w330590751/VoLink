@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Activity, Antenna, BatteryCharging, ChevronDown, CircleGauge, Download, Gauge, HardDrive,
+  Activity, AlertTriangle, Antenna, BatteryCharging, CheckCircle2, ChevronDown, CircleGauge, Download, Gauge, HardDrive,
   Mail, MessageSquareText, Phone, Plane, Power, Radio, RefreshCw, Save, Send, Settings2,
-  Signal, CreditCard, Smartphone, Terminal, Trash2, Wifi
+  Signal, Stethoscope, CreditCard, Smartphone, Terminal, Trash2, Wifi
 } from 'lucide-react'
-import type { DevicePatch, DeviceRecord, EsimProfileInput } from '../shared/types'
+import type { DeviceDiagnostics, DevicePatch, DeviceRecord, EsimProfileInput } from '../shared/types'
 import type { DeviceTab, MainPage, PageProps } from './app-types'
 import { Empty, Field, Panel, SectionTitle, Status, Toggle, formatDate } from './components'
 
@@ -39,7 +39,7 @@ export function DevicePage({ snapshot, selectedId, setSelectedId, tab, setTab, n
     </Panel>
     <Panel className="device-detail">
       <div className="tabbar">{tabs.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}</div>
-      {tab === 'overview' ? <Overview device={device} refresh={refresh} /> : null}
+      {tab === 'overview' ? <Overview device={device} refresh={refresh} busy={busy} action={action} /> : null}
       {tab === 'esim' ? <EsimTab device={device} snapshot={snapshot} busy={busy} action={action} /> : null}
       {tab === 'at' ? <AtTab device={device} busy={busy} action={action} /> : null}
       {tab === 'ussd' ? <UssdTab device={device} busy={busy} action={action} /> : null}
@@ -50,21 +50,50 @@ export function DevicePage({ snapshot, selectedId, setSelectedId, tab, setTab, n
   </div>
 }
 
-function Overview({ device, refresh }: { device: DeviceRecord; refresh: () => Promise<void> }) {
+function Overview({ device, refresh, busy, action }: { device: DeviceRecord; refresh: () => Promise<void>; busy: boolean; action: PageProps['action'] }) {
   const status = device.status
+  const [diagnostics, setDiagnostics] = useState<DeviceDiagnostics>()
+  const diagnose = async () => {
+    if (!window.voLink) { setDiagnostics(demoDiagnostics(device)); return }
+    setDiagnostics(await action(() => window.voLink!.diagnoseDevice(device.id), '设备诊断完成'))
+  }
+  const needsAttention = status.simState === 'READY' && (!status.registration.startsWith('已注册') || status.signal === 0)
   return <div className="tab-content">
-    <SectionTitle icon={<Activity />} title="设备概览" subtitle="蜂窝网络、SIM 与模组实时状态" actions={<button className="ghost" onClick={() => void refresh()}><RefreshCw size={16} />刷新状态</button>} />
+    <SectionTitle icon={<Activity />} title="设备概览" subtitle="蜂窝网络、SIM 与模组实时状态" actions={<><button className="ghost" disabled={busy} onClick={() => void diagnose()}><Stethoscope size={16} />运行诊断</button><button className="ghost" onClick={() => void refresh()}><RefreshCw size={16} />刷新状态</button></>} />
+    {device.state === 'error' ? <div className="health-banner error"><AlertTriangle /><div><strong>模组通信异常</strong><p>{device.lastError || 'AT 端口无法通信，请检查驱动和串口占用。'}</p></div></div> : device.state !== 'online' ? <div className="health-banner warning"><AlertTriangle /><div><strong>当前未检测到物理模组</strong><p>下面显示的是最后一次成功读取的状态。请检查 USB 连接与驱动，然后点击“刷新状态”或等待自动扫描。</p></div></div> : needsAttention ? <div className="health-banner warning"><AlertTriangle /><div><strong>SIM 已识别，但蜂窝网络尚未就绪</strong><p>建议运行诊断，检查天线、飞行模式、APN、频段和运营商注册状态。</p></div></div> : null}
     <div className="overview-grid">
-      <Metric icon={<Signal />} label="信号强度" value={`${status.signal}%`} note={`${status.dbm} dBm`} />
-      <Metric icon={<Antenna />} label="网络制式" value={status.network} note={status.band} />
+      <Metric icon={<Signal />} label="信号强度" value={`${status.signal}%`} note={status.rsrp !== undefined ? `RSRP ${status.rsrp} dBm` : `${status.dbm} dBm`} />
+      <Metric icon={<Antenna />} label="网络制式" value={status.network} note={[status.band, status.channel ? `信道 ${status.channel}` : ''].filter(Boolean).join(' · ')} />
       <Metric icon={<Radio />} label="运营商" value={status.operator} note={status.registration} />
       <Metric icon={<CreditCard />} label="SIM 状态" value={status.simState} note={status.iccid || '未读取 ICCID'} />
     </div>
+    <div className="radio-quality-grid"><RadioValue label="RSRP" value={status.rsrp} unit="dBm" good={-90} weak={-110} /><RadioValue label="RSRQ" value={status.rsrq} unit="dB" good={-10} weak={-16} /><RadioValue label="SINR" value={status.sinr} unit="dB" good={20} weak={0} /><RadioValue label="分组数据" text={status.packetService || '未报告'} /></div>
     <div className="detail-columns">
       <div className="info-block"><h3>设备信息</h3><Info label="型号" value={device.model} /><Info label="制造商" value={device.manufacturer} /><Info label="IMEI" value={status.imei || '---'} /><Info label="固件" value={status.firmware || '---'} /></div>
       <div className="info-block"><h3>网络信息</h3><Info label="接口" value={device.networkInterface || 'Windows WWAN'} /><Info label="AT 端口" value={device.serialPath || '自动检测'} /><Info label="后端" value={device.backend || 'AT'} /><Info label="更新时间" value={formatDate(status.updatedAt)} /></div>
     </div>
+    {diagnostics ? <DiagnosticReport report={diagnostics} /> : null}
   </div>
+}
+
+function RadioValue({ label, value, text, unit, good = 0, weak = 0 }: { label: string; value?: number; text?: string; unit?: string; good?: number; weak?: number }) {
+  const state = value === undefined ? 'unknown' : value >= good ? 'good' : value >= weak ? 'warning' : 'poor'
+  return <div className={`radio-value ${state}`}><small>{label}</small><strong>{text || (value === undefined ? '—' : `${value} ${unit}`)}</strong></div>
+}
+
+function DiagnosticReport({ report }: { report: DeviceDiagnostics }) {
+  return <div className="diagnostic-report"><div className="diagnostic-heading"><div><h3>设备诊断报告</h3><p>{formatDate(report.generatedAt)} · {report.summary === 'healthy' ? '状态良好' : report.summary === 'offline' ? '设备离线' : '需要关注'}</p></div><Status state={report.summary === 'healthy' ? 'online' : report.summary === 'offline' ? 'error' : 'warning'}>{report.summary === 'healthy' ? '通过' : '需处理'}</Status></div><div className="diagnostic-checks">{report.checks.map(check => <article key={check.id} className={check.state}><span>{check.state === 'pass' ? <CheckCircle2 /> : <AlertTriangle />}</span><div><strong>{check.label}</strong><p>{check.value}</p>{check.suggestion ? <small>{check.suggestion}</small> : null}</div></article>)}</div></div>
+}
+
+function demoDiagnostics(device: DeviceRecord): DeviceDiagnostics {
+  return { deviceId: device.id, generatedAt: new Date().toISOString(), summary: 'healthy', raw: {}, checks: [
+    { id: 'port', label: 'AT 控制端口', state: 'pass', value: `${device.displayPort} 可通信` },
+    { id: 'sim', label: 'SIM 状态', state: 'pass', value: device.status.simState },
+    { id: 'identity', label: 'SIM 标识读取', state: 'pass', value: 'ICCID 与 IMSI 已读取' },
+    { id: 'signal', label: '射频信号', state: 'pass', value: `${device.status.signal}% · ${device.status.dbm} dBm` },
+    { id: 'registration', label: '网络注册', state: 'pass', value: `${device.status.registration} · ${device.status.operator}` },
+    { id: 'packet', label: '分组数据', state: 'pass', value: 'Attached' }
+  ] }
 }
 
 function Metric({ icon, label, value, note }: { icon: React.ReactNode; label: string; value: string; note: string }) {

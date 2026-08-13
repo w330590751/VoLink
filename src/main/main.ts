@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AppSettings, DevicePatch, EsimProfileInput, ProxyInput } from '../shared/types.js'
+import type { AppSettings, DevicePatch, EsimProfileInput, ProxyInput, UpdateInfo } from '../shared/types.js'
 import { AppStore } from './store.js'
 import { DeviceService } from './device-service.js'
 import { SMSService } from './sms-service.js'
@@ -59,6 +59,13 @@ async function createServices() {
 function registerIPC(current: NonNullable<typeof services>) {
   const { store, devices, sms, proxies, esim, calls } = current
   ipcMain.handle('app:snapshot', () => devices.snapshot())
+  ipcMain.handle('app:check-update', () => checkForUpdates(app.getVersion()))
+  ipcMain.handle('app:open-external', async (_, url: string) => {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com') throw new Error('仅允许打开 GitHub HTTPS 链接')
+    await shell.openExternal(parsed.toString())
+    return true
+  })
   ipcMain.handle('device:rescan', () => devices.rescan())
   ipcMain.handle('device:add', (_, portPath: string, name?: string) => devices.addDevice(portPath, name))
   ipcMain.handle('device:update', (_, id: string, patch: DevicePatch) => devices.updateDevice(id, patch))
@@ -70,6 +77,7 @@ function registerIPC(current: NonNullable<typeof services>) {
   ipcMain.handle('device:flight-mode', (_, id: string, enabled: boolean) => devices.setFlightMode(id, enabled))
   ipcMain.handle('device:operators-scan', (_, id: string) => devices.scanOperators(id))
   ipcMain.handle('device:operator-select', (_, id: string, plmn?: string) => devices.selectOperator(id, plmn))
+  ipcMain.handle('device:diagnose', (_, id: string) => devices.diagnose(id))
   ipcMain.handle('device:list-ports', () => devices.listPorts())
 
   ipcMain.handle('sms:send', (_, deviceId: string, recipient: string, body: string) => sms.send(deviceId, recipient, body))
@@ -110,6 +118,38 @@ function registerIPC(current: NonNullable<typeof services>) {
       event: 'volink.test'
     }, true)
   })
+}
+
+async function checkForUpdates(currentVersion: string): Promise<UpdateInfo> {
+  const response = await fetch('https://api.github.com/repos/w330590751/VoLink/releases/latest', {
+    headers: { accept: 'application/vnd.github+json', 'user-agent': `VoLink/${currentVersion}` }
+  })
+  if (!response.ok) throw new Error(`检查更新失败：GitHub HTTP ${response.status}`)
+  const release = await response.json() as {
+    tag_name?: string
+    html_url?: string
+    published_at?: string
+    assets?: Array<{ name?: string; browser_download_url?: string }>
+  }
+  const latestVersion = (release.tag_name || currentVersion).replace(/^v/i, '')
+  return {
+    currentVersion,
+    latestVersion,
+    available: compareVersions(latestVersion, currentVersion) > 0,
+    releaseUrl: release.html_url || 'https://github.com/w330590751/VoLink/releases/latest',
+    downloadUrl: release.assets?.find(asset => asset.name?.endsWith('-portable.exe'))?.browser_download_url,
+    publishedAt: release.published_at,
+    checkedAt: new Date().toISOString()
+  }
+}
+
+function compareVersions(left: string, right: string) {
+  const a = left.split(/[.-]/).map(part => Number.parseInt(part, 10) || 0)
+  const b = right.split(/[.-]/).map(part => Number.parseInt(part, 10) || 0)
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    if ((a[index] || 0) !== (b[index] || 0)) return (a[index] || 0) - (b[index] || 0)
+  }
+  return 0
 }
 
 function scheduleAutoScan(current: NonNullable<typeof services>) {

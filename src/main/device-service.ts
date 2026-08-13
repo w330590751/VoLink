@@ -5,6 +5,7 @@ import type {
   ATCommandResult,
   AppSnapshot,
   DevicePatch,
+  DeviceDiagnostics,
   DeviceRecord,
   DeviceStatus,
   SerialPortDescriptor,
@@ -259,6 +260,22 @@ export class DeviceService {
     return true
   }
 
+  async diagnose(deviceId: string): Promise<DeviceDiagnostics> {
+    const device = this.requireDevice(deviceId)
+    if (device.mode === 'simulation') return buildDiagnostics(device, {})
+    if (!device.serialPath) throw new Error('设备未配置 AT 端口')
+    const commands = ['AT', 'AT+CPIN?', 'AT+CCID', 'AT+CIMI', 'AT+CSQ', 'AT+CESQ', 'AT+CEREG?', 'AT+CGREG?', 'AT+CREG?', 'AT+COPS?', 'AT!GSTATUS?']
+    const raw = await this.exclusive(device.serialPath, () => withATSession(device.serialPath!, async session => {
+      const responses: Record<string, string> = {}
+      for (const command of commands) responses[command] = await session.command(command, 5000).catch(error => `ERROR: ${error instanceof Error ? error.message : String(error)}`)
+      return responses
+    }))
+    const fresh = await this.refreshDevice(deviceId).catch(() => this.requireDevice(deviceId))
+    const diagnostics = buildDiagnostics(fresh, raw)
+    await this.store.log(diagnostics.summary === 'healthy' ? 'info' : 'warn', 'diagnostics', `${fresh.name} 诊断完成`, diagnostics.checks.filter(check => check.state !== 'pass').map(check => `${check.label}: ${check.value}`).join('；'))
+    return diagnostics
+  }
+
   requireDevice(id: string) {
     const device = this.store.snapshot().devices.find(item => item.id === id)
     if (!device) throw new Error('设备不存在')
@@ -277,12 +294,15 @@ export class DeviceService {
       const iccid = await query('AT+CCID')
       const imsi = await query('AT+CIMI')
       const signal = await query('AT+CSQ')
+      const extendedSignal = await query('AT+CESQ')
       const operator = await query('AT+COPS?')
       const epsRegistration = await query('AT+CEREG?')
       const csRegistration = await query('AT+CREG?')
       const firmware = await query('AT+CGMR')
+      const sierraStatus = /sierra/i.test(identity) ? await query('AT!GSTATUS?') : ''
       const csq = Number(signal.match(/\+CSQ:\s*(\d+)/)?.[1] ?? 0)
       const dbm = csq === 99 ? -113 : -113 + 2 * csq
+      const radio = parseRadioMetrics(extendedSignal, sierraStatus)
       const operatorMatch = operator.match(/\+COPS:\s*\d+,\d+,"([^"]*)"(?:,(\d+))?/)
       const idLines = identity.split('\n').filter(line => !/^(ATI|OK)$/i.test(line))
       const model = idLines.find(line => /EC\d|EG\d|EM\d|RM\d|SIMCOM|HUAWEI|MODEM/i.test(line)) || idLines.at(-1) || 'Cellular Modem'
@@ -291,9 +311,10 @@ export class DeviceService {
         manufacturer: idLines[0] || '',
         status: {
           ...emptyStatus(),
-          signal: csq === 99 ? 0 : Math.min(100, Math.round(csq / 31 * 100)),
-          dbm,
-          network: actToNetwork(operatorMatch?.[2]),
+          signal: radio.rsrp !== undefined ? rsrpToPercent(radio.rsrp) : csq === 99 ? 0 : Math.min(100, Math.round(csq / 31 * 100)),
+          dbm: radio.rsrp ?? dbm,
+          network: radio.network || actToNetwork(operatorMatch?.[2]),
+          band: radio.band || '—',
           operator: operatorMatch?.[1] || '未知',
           imei: extractDigits(imei, 14, 17),
           imsi: extractDigits(imsi, 14, 17),
@@ -301,6 +322,11 @@ export class DeviceService {
           simState: sim.match(/\+CPIN:\s*([^\n]+)/)?.[1]?.trim() || '未知',
           registration: registrationLabel(epsRegistration || csRegistration),
           firmware: firmware.split('\n').find(line => !/^(AT\+CGMR|OK)$/i.test(line)) || '',
+          rsrp: radio.rsrp,
+          rsrq: radio.rsrq,
+          sinr: radio.sinr,
+          channel: radio.channel,
+          packetService: radio.packetService,
           updatedAt: new Date().toISOString()
         } satisfies DeviceStatus
       }
@@ -317,6 +343,57 @@ export class DeviceService {
     })
   }
 }
+
+function buildDiagnostics(device: DeviceRecord, raw: Record<string, string>): DeviceDiagnostics {
+  const status = device.status
+  const portReady = device.state === 'online'
+  const simReady = status.simState === 'READY'
+  const registered = status.registration.startsWith('已注册')
+  const hasSignal = status.signal > 0 || (status.rsrp !== undefined && status.rsrp > -140)
+  const checks: DeviceDiagnostics['checks'] = [
+    { id: 'port', label: 'AT 控制端口', state: portReady ? 'pass' : 'error', value: portReady ? `${device.serialPath || device.displayPort} 可通信` : device.lastError || '端口不可用', suggestion: portReady ? undefined : '关闭占用串口的软件，检查驱动后重新扫描。' },
+    { id: 'sim', label: 'SIM 状态', state: simReady ? 'pass' : status.simState.includes('PIN') ? 'warning' : 'error', value: status.simState || '未知', suggestion: simReady ? undefined : '重新插卡并确认卡槽方向；若需要 PIN，请先解锁 SIM。' },
+    { id: 'identity', label: 'SIM 标识读取', state: status.iccid && status.imsi ? 'pass' : simReady ? 'warning' : 'unknown', value: status.iccid && status.imsi ? `ICCID ${maskIdentifier(status.iccid)} · IMSI ${maskIdentifier(status.imsi)}` : 'ICCID/IMSI 不完整', suggestion: status.iccid && status.imsi ? undefined : '刷新状态；部分模组需要厂商专用 ICCID 指令。' },
+    { id: 'signal', label: '射频信号', state: hasSignal ? status.signal >= 25 ? 'pass' : 'warning' : 'error', value: status.rsrp !== undefined ? `RSRP ${status.rsrp} dBm${status.rsrq !== undefined ? ` · RSRQ ${status.rsrq} dB` : ''}${status.sinr !== undefined ? ` · SINR ${status.sinr} dB` : ''}` : `${status.signal}% · ${status.dbm} dBm`, suggestion: hasSignal ? status.signal < 25 ? '信号较弱，调整天线位置或检查馈线。' : undefined : '检查主/分集天线连接，确认飞行模式已关闭。' },
+    { id: 'registration', label: '网络注册', state: registered ? 'pass' : status.registration.includes('搜索') ? 'warning' : 'error', value: `${status.registration} · ${status.operator} · ${status.network}`, suggestion: registered ? undefined : '确认 APN、频段与运营商兼容；必要时执行运营商扫描。' },
+    { id: 'packet', label: '分组数据', state: /attached|connected/i.test(status.packetService || '') ? 'pass' : registered ? 'warning' : 'unknown', value: status.packetService || '未报告', suggestion: registered && !/attached|connected/i.test(status.packetService || '') ? 'SIM 已注册但数据未附着，请检查 APN 和 Windows WWAN 连接。' : undefined }
+  ]
+  const severe = checks.some(check => check.state === 'error')
+  const attention = checks.some(check => check.state === 'warning')
+  return { deviceId: device.id, generatedAt: new Date().toISOString(), summary: !portReady ? 'offline' : severe || attention ? 'attention' : 'healthy', checks, raw }
+}
+
+function maskIdentifier(value: string) {
+  if (value.length < 9) return value
+  return `${value.slice(0, 6)}…${value.slice(-4)}`
+}
+
+function parseRadioMetrics(cesq: string, sierra: string) {
+  const result: { rsrp?: number; rsrq?: number; sinr?: number; band?: string; channel?: string; network?: string; packetService?: string } = {}
+  const cesqMatch = cesq.match(/\+CESQ:\s*\d+,\d+,\d+,\d+,(\d+),(\d+)/)
+  if (cesqMatch) {
+    const rsrqIndex = Number(cesqMatch[1])
+    const rsrpIndex = Number(cesqMatch[2])
+    if (rsrqIndex >= 0 && rsrqIndex <= 34) result.rsrq = roundOne(-19.5 + rsrqIndex * 0.5)
+    if (rsrpIndex >= 0 && rsrpIndex <= 97) result.rsrp = -140 + rsrpIndex
+  }
+  result.rsrp = parseSignedMetric(sierra, /RSRP[^\n]*?(-?\d+(?:\.\d+)?)\s*dBm/i) ?? result.rsrp
+  result.rsrq = parseSignedMetric(sierra, /RSRQ[^\n]*?(-?\d+(?:\.\d+)?)\s*dB/i) ?? result.rsrq
+  result.sinr = parseSignedMetric(sierra, /SINR[^\n]*?(-?\d+(?:\.\d+)?)\s*dB/i)
+  result.band = sierra.match(/LTE band:\s*([^\r\n]+)/i)?.[1]?.trim() || sierra.match(/LTE band[^\n]*?B(\d+)/i)?.[1]?.replace(/^/, 'B')
+  result.channel = sierra.match(/LTE Rx chan:\s*(\d+)/i)?.[1]
+  result.network = sierra.match(/System mode:\s*([^\r\n]+)/i)?.[1]?.trim()
+  result.packetService = sierra.match(/PS state:\s*([^\r\n]+)/i)?.[1]?.trim()
+  return result
+}
+
+function parseSignedMetric(value: string, pattern: RegExp) {
+  const matched = value.match(pattern)?.[1]
+  return matched === undefined ? undefined : Number(matched)
+}
+
+function roundOne(value: number) { return Math.round(value * 10) / 10 }
+function rsrpToPercent(rsrp: number) { return Math.max(0, Math.min(100, Math.round((rsrp + 120) / 40 * 100))) }
 
 function simulateAT(command: string, device: DeviceRecord) {
   const upper = command.toUpperCase()
