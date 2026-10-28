@@ -141,6 +141,7 @@ export class DeviceService {
     if (existing) return existing
     const descriptor = (await this.listPorts()).find(port => port.path === portPath)
     const probed = await this.probe(portPath)
+    const wwan = await findWindowsWwanInterface(probed.status.imei)
     const device: DeviceRecord = {
       id: `dev-${crypto.randomUUID()}`,
       name: name?.trim() || probed.model || `模组 ${portPath}`,
@@ -152,7 +153,8 @@ export class DeviceService {
       state: 'online',
       enabled: true,
       autoConnect: true,
-      backend: 'AT', ipVersion: 'IPv4', apn: '', networkEnabled: true, vowifiEnabled: false, airplaneEnabled: false,
+      networkInterface: wwan?.name,
+      backend: 'AT', ipVersion: 'IPv4', apn: '', networkEnabled: wwan?.connected ?? true, vowifiEnabled: false, airplaneEnabled: false,
       capabilities: { sms: true, voice: true, ussd: true, esim: true, vowifi: false, rawAT: true },
       status: probed.status
     }
@@ -184,6 +186,7 @@ export class DeviceService {
     if (!device.serialPath) throw new Error('设备未配置串口')
     try {
       const probed = await this.probe(device.serialPath)
+      const wwan = await findWindowsWwanInterface(probed.status.imei)
       await this.store.update(draft => {
         const target = draft.devices.find(item => item.id === id)
         if (!target) return
@@ -191,6 +194,10 @@ export class DeviceService {
         target.model = probed.model || target.model
         target.manufacturer = probed.manufacturer || target.manufacturer
         target.status = probed.status
+        if (wwan) {
+          target.networkInterface = wwan.name
+          target.networkEnabled = wwan.connected
+        }
         delete target.lastError
       })
     } catch (error) {
@@ -245,8 +252,10 @@ export class DeviceService {
   }
 
   async setFlightMode(deviceId: string, enabled: boolean) {
+    const device = this.requireDevice(deviceId)
     await this.executeAT(deviceId, enabled ? 'AT+CFUN=0' : 'AT+CFUN=1', 15_000)
-    await this.updateDevice(deviceId, { airplaneEnabled: enabled, networkEnabled: !enabled })
+    const wwan = !enabled && device.mode !== 'simulation' ? await findWindowsWwanInterface(device.status.imei, device.networkInterface) : undefined
+    await this.updateDevice(deviceId, { airplaneEnabled: enabled, networkEnabled: device.mode === 'simulation' ? !enabled : wwan?.connected ?? false })
     return true
   }
 
@@ -254,10 +263,12 @@ export class DeviceService {
     const device = this.requireDevice(deviceId)
     if (device.airplaneEnabled && enabled) throw new Error('请先关闭飞行模式，再开启移动数据')
     if (device.mode !== 'simulation') {
-      await this.executeAT(deviceId, enabled ? 'AT+CGATT=1' : 'AT+CGATT=0', 30_000)
+      const wwan = await findWindowsWwanInterface(device.status.imei, device.networkInterface)
+      if (wwan) await setWindowsWwanConnected(wwan.name, enabled)
+      else await this.executeAT(deviceId, enabled ? 'AT+CGACT=1,1' : 'AT+CGACT=0,1', 30_000)
     }
     await this.updateDevice(deviceId, { networkEnabled: enabled })
-    await this.store.log('info', 'device', `${device.name} 移动数据已${enabled ? '开启' : '关闭'}`, '使用分组数据附着控制，短信与语音射频保持可用')
+    await this.store.log('info', 'device', `${device.name} 移动数据已${enabled ? '连接' : '断开'}`, '仅控制 Windows WWAN/PDP 数据会话，蜂窝注册、信号、短信与语音保持可用')
     return true
   }
 
@@ -500,4 +511,65 @@ async function listWindowsModemPorts(): Promise<SerialPortDescriptor[]> {
   } catch {
     return []
   }
+}
+
+type WindowsWwanInterface = { name: string; deviceId: string; connected: boolean }
+
+async function findWindowsWwanInterface(imei?: string, preferredName?: string): Promise<WindowsWwanInterface | undefined> {
+  if (process.platform !== 'win32') return undefined
+  try {
+    const stdout = await runNetsh(['mbn', 'show', 'interfaces'])
+    const blocks = stdout.split(/\r?\n\s*\r?\n/)
+    const interfaces = blocks.flatMap(block => {
+      const name = block.match(/^\s*(?:Name|名称)\s*:\s*(.+)$/mi)?.[1]?.trim()
+      const deviceId = block.match(/^\s*(?:Device Id|设备 ID)\s*:\s*(\d+)$/mi)?.[1]?.trim() || ''
+      return name ? [{ name, deviceId, connected: false }] : []
+    })
+    const selected = interfaces.find(item => imei && item.deviceId === imei) || interfaces.find(item => preferredName && item.name === preferredName) || (interfaces.length === 1 ? interfaces[0] : undefined)
+    if (!selected) return undefined
+    const connection = await runNetsh(['mbn', 'show', 'connection', `interface=${selected.name}`])
+    const state = connection.match(/^\s*(?:Interface State|接口状态)\s*:\s*(.+)$/mi)?.[1]?.trim() || ''
+    selected.connected = /^(?:Connected|已连接)$/i.test(state)
+    return selected
+  } catch {
+    return undefined
+  }
+}
+
+async function setWindowsWwanConnected(interfaceName: string, enabled: boolean) {
+  if (!enabled) {
+    const stdout = await runNetsh(['mbn', 'disconnect', `interface=${interfaceName}`], 20_000)
+    if (/(?:Failure|失败)/i.test(stdout) && !/(?:Context Not Activated|未激活)/i.test(stdout)) throw new Error(`断开 Windows 移动数据失败：${compactNetshError(stdout)}`)
+    return
+  }
+
+  const profile = await findDefaultWwanProfile(interfaceName)
+  if (!profile) throw new Error('Windows 未找到可用的移动数据配置文件，请先在系统“手机网络”中配置 APN')
+  const stdout = await runNetsh(['mbn', 'connect', `interface=${interfaceName}`, 'connmode=name', `name=${profile}`], 30_000)
+  if (/(?:Failure|失败)/i.test(stdout)) throw new Error(`连接 Windows 移动数据失败：${compactNetshError(stdout)}`)
+}
+
+async function findDefaultWwanProfile(interfaceName: string) {
+  const stdout = await runNetsh(['mbn', 'show', 'profiles', `interface=${interfaceName}`])
+  const profiles = stdout.split(/\r?\n/).map(line => line.trim()).filter(line => line && !/Profiles on interface|配置文件|^-+$|:$/.test(line))
+  for (const profile of profiles) {
+    const detail = await runNetsh(['mbn', 'show', 'profile', `interface=${interfaceName}`, `name=${profile}`])
+    if (/(?:Default|默认)\s*:\s*(?:Yes|是)/i.test(detail)) return profile
+  }
+  return profiles.at(-1)
+}
+
+async function runNetsh(args: string[], timeout = 8000) {
+  try {
+    const { stdout } = await execFileAsync('netsh.exe', args, { windowsHide: true, timeout, maxBuffer: 1024 * 1024 })
+    return stdout
+  } catch (error) {
+    const output = (error as { stdout?: string }).stdout
+    if (typeof output === 'string' && output.trim()) return output
+    throw error
+  }
+}
+
+function compactNetshError(value: string) {
+  return value.replace(/\s+/g, ' ').trim().slice(0, 240) || '未知错误'
 }

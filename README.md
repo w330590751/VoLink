@@ -33,7 +33,7 @@ VoLink 是一套独立实现的 Windows 蜂窝模块桌面软件。它自动发�
 | HTTP / SOCKS5 代理 | ✅ | 多实例、认证和移动网络接口绑定 |
 | 通知 | ✅ | Telegram、飞书、QQ Bot、Bark、Email、PushPlus、Webhook |
 | 卡策略 | ✅ | APN、IP 版本、蜂窝网络和飞行模式控制 |
-| 独立流量开关 | ✅ | 使用 `AT+CGATT` 开关移动数据，不影响短信和语音射频 |
+| 独立流量开关 | ✅ | 断开 Windows WWAN/PDP 数据会话，保持蜂窝注册、信号、短信和语音射频 |
 | 在线更新检查 | ✅ | 从 GitHub Releases 查询新版本并打开安全下载地址 |
 | VoWiFi / IMS | 能力受限 | 已有策略界面；真实通话需要运营商、模块固件及独立 IMS 后端配合 |
 
@@ -77,7 +77,7 @@ npm run dev
 npm run dist
 ```
 
-输出：`release/VoLink-1.1.1-portable.exe`
+输出：`release/VoLink-1.1.2-portable.exe`
 
 ## 架构
 
