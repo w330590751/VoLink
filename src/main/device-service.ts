@@ -5,6 +5,7 @@ import type {
   ATCommandResult,
   AppSnapshot,
   DevicePatch,
+  DeviceDiagnostics,
   DeviceRecord,
   DeviceStatus,
   SerialPortDescriptor,
@@ -37,13 +38,13 @@ const simulationDevices = (): DeviceRecord[] => [
     id: 'sim-ec25', name: '主卡模组', model: 'EC25-A', manufacturer: 'Quectel', displayPort: '模拟 COM3', mode: 'simulation',
     state: 'online', enabled: true, autoConnect: true,
     capabilities: { sms: true, voice: true, ussd: true, esim: false, vowifi: false, rawAT: true },
-    status: { signal: 92, dbm: -67, network: '5G NSA', band: 'n78', operator: '中国移动', imei: '866123045678912', imsi: '460001234567890', iccid: '8986001234567890123', simState: 'READY', registration: '已注册', firmware: 'EC25EFAR06A12M4G', updatedAt: new Date().toISOString() }
+    status: { signal: 92, dbm: -67, network: '5G NSA', band: 'n78', operator: '中国移动', imei: '866123045678912', imsi: '460001234567890', iccid: '8986001234567890123', phoneNumber: '13800138000', simState: 'READY', registration: '已注册', firmware: 'EC25EFAR06A12M4G', updatedAt: new Date().toISOString() }
   },
   {
     id: 'sim-ec20', name: '短信模组', model: 'EC20-C', manufacturer: 'Quectel', displayPort: '模拟 COM5', mode: 'simulation',
     state: 'online', enabled: true, autoConnect: true,
     capabilities: { sms: true, voice: true, ussd: true, esim: true, vowifi: true, rawAT: true },
-    status: { signal: 61, dbm: -81, network: '4G LTE', band: 'B3', operator: '中国联通', imei: '860512040123456', imsi: '460011234567890', iccid: '8986011234567890123', simState: 'READY', registration: '已注册', firmware: 'EC20CEHCLGR08A09M1G', updatedAt: new Date().toISOString() }
+    status: { signal: 61, dbm: -81, network: '4G LTE', band: 'B3', operator: '中国联通', imei: '860512040123456', imsi: '460011234567890', iccid: '8986011234567890123', phoneNumber: '13000100000', simState: 'READY', registration: '已注册', firmware: 'EC20CEHCLGR08A09M1G', updatedAt: new Date().toISOString() }
   }
 ]
 
@@ -140,6 +141,7 @@ export class DeviceService {
     if (existing) return existing
     const descriptor = (await this.listPorts()).find(port => port.path === portPath)
     const probed = await this.probe(portPath)
+    const wwan = await findWindowsWwanInterface(probed.status.imei)
     const device: DeviceRecord = {
       id: `dev-${crypto.randomUUID()}`,
       name: name?.trim() || probed.model || `模组 ${portPath}`,
@@ -151,7 +153,8 @@ export class DeviceService {
       state: 'online',
       enabled: true,
       autoConnect: true,
-      backend: 'AT', ipVersion: 'IPv4', apn: '', networkEnabled: true, vowifiEnabled: false, airplaneEnabled: false,
+      networkInterface: wwan?.name,
+      backend: 'AT', ipVersion: 'IPv4', apn: '', networkEnabled: wwan?.connected ?? true, vowifiEnabled: false, airplaneEnabled: false,
       capabilities: { sms: true, voice: true, ussd: true, esim: true, vowifi: false, rawAT: true },
       status: probed.status
     }
@@ -183,6 +186,7 @@ export class DeviceService {
     if (!device.serialPath) throw new Error('设备未配置串口')
     try {
       const probed = await this.probe(device.serialPath)
+      const wwan = await findWindowsWwanInterface(probed.status.imei)
       await this.store.update(draft => {
         const target = draft.devices.find(item => item.id === id)
         if (!target) return
@@ -190,6 +194,10 @@ export class DeviceService {
         target.model = probed.model || target.model
         target.manufacturer = probed.manufacturer || target.manufacturer
         target.status = probed.status
+        if (wwan) {
+          target.networkInterface = wwan.name
+          target.networkEnabled = wwan.connected
+        }
         delete target.lastError
       })
     } catch (error) {
@@ -244,8 +252,23 @@ export class DeviceService {
   }
 
   async setFlightMode(deviceId: string, enabled: boolean) {
+    const device = this.requireDevice(deviceId)
     await this.executeAT(deviceId, enabled ? 'AT+CFUN=0' : 'AT+CFUN=1', 15_000)
-    await this.updateDevice(deviceId, { airplaneEnabled: enabled, networkEnabled: !enabled })
+    const wwan = !enabled && device.mode !== 'simulation' ? await findWindowsWwanInterface(device.status.imei, device.networkInterface) : undefined
+    await this.updateDevice(deviceId, { airplaneEnabled: enabled, networkEnabled: device.mode === 'simulation' ? !enabled : wwan?.connected ?? false })
+    return true
+  }
+
+  async setDataEnabled(deviceId: string, enabled: boolean) {
+    const device = this.requireDevice(deviceId)
+    if (device.airplaneEnabled && enabled) throw new Error('请先关闭飞行模式，再开启移动数据')
+    if (device.mode !== 'simulation') {
+      const wwan = await findWindowsWwanInterface(device.status.imei, device.networkInterface)
+      if (wwan) await setWindowsWwanConnected(wwan.name, enabled)
+      else await this.executeAT(deviceId, enabled ? 'AT+CGACT=1,1' : 'AT+CGACT=0,1', 30_000)
+    }
+    await this.updateDevice(deviceId, { networkEnabled: enabled })
+    await this.store.log('info', 'device', `${device.name} 移动数据已${enabled ? '连接' : '断开'}`, '仅控制 Windows WWAN/PDP 数据会话，蜂窝注册、信号、短信与语音保持可用')
     return true
   }
 
@@ -257,6 +280,22 @@ export class DeviceService {
   async selectOperator(deviceId: string, plmn?: string) {
     await this.executeAT(deviceId, plmn ? `AT+COPS=1,2,"${plmn}"` : 'AT+COPS=0', 45_000)
     return true
+  }
+
+  async diagnose(deviceId: string): Promise<DeviceDiagnostics> {
+    const device = this.requireDevice(deviceId)
+    if (device.mode === 'simulation') return buildDiagnostics(device, {})
+    if (!device.serialPath) throw new Error('设备未配置 AT 端口')
+    const commands = ['AT', 'AT+CPIN?', 'AT+CCID', 'AT+CIMI', 'AT+CSQ', 'AT+CESQ', 'AT+CEREG?', 'AT+CGREG?', 'AT+CREG?', 'AT+COPS?', 'AT!GSTATUS?']
+    const raw = await this.exclusive(device.serialPath, () => withATSession(device.serialPath!, async session => {
+      const responses: Record<string, string> = {}
+      for (const command of commands) responses[command] = await session.command(command, 5000).catch(error => `ERROR: ${error instanceof Error ? error.message : String(error)}`)
+      return responses
+    }))
+    const fresh = await this.refreshDevice(deviceId).catch(() => this.requireDevice(deviceId))
+    const diagnostics = buildDiagnostics(fresh, raw)
+    await this.store.log(diagnostics.summary === 'healthy' ? 'info' : 'warn', 'diagnostics', `${fresh.name} 诊断完成`, diagnostics.checks.filter(check => check.state !== 'pass').map(check => `${check.label}: ${check.value}`).join('；'))
+    return diagnostics
   }
 
   requireDevice(id: string) {
@@ -275,14 +314,19 @@ export class DeviceService {
       const imei = await query('AT+CGSN')
       const sim = await query('AT+CPIN?')
       const iccid = await query('AT+CCID')
+      const subscriberNumber = await query('AT+CNUM')
       const imsi = await query('AT+CIMI')
       const signal = await query('AT+CSQ')
+      const extendedSignal = await query('AT+CESQ')
       const operator = await query('AT+COPS?')
+      const packetAttach = await query('AT+CGATT?')
       const epsRegistration = await query('AT+CEREG?')
       const csRegistration = await query('AT+CREG?')
       const firmware = await query('AT+CGMR')
+      const sierraStatus = /sierra/i.test(identity) ? await query('AT!GSTATUS?') : ''
       const csq = Number(signal.match(/\+CSQ:\s*(\d+)/)?.[1] ?? 0)
       const dbm = csq === 99 ? -113 : -113 + 2 * csq
+      const radio = parseRadioMetrics(extendedSignal, sierraStatus)
       const operatorMatch = operator.match(/\+COPS:\s*\d+,\d+,"([^"]*)"(?:,(\d+))?/)
       const idLines = identity.split('\n').filter(line => !/^(ATI|OK)$/i.test(line))
       const model = idLines.find(line => /EC\d|EG\d|EM\d|RM\d|SIMCOM|HUAWEI|MODEM/i.test(line)) || idLines.at(-1) || 'Cellular Modem'
@@ -291,16 +335,23 @@ export class DeviceService {
         manufacturer: idLines[0] || '',
         status: {
           ...emptyStatus(),
-          signal: csq === 99 ? 0 : Math.min(100, Math.round(csq / 31 * 100)),
-          dbm,
-          network: actToNetwork(operatorMatch?.[2]),
-          operator: operatorMatch?.[1] || '未知',
+          signal: radio.rsrp !== undefined ? rsrpToPercent(radio.rsrp) : csq === 99 ? 0 : Math.min(100, Math.round(csq / 31 * 100)),
+          dbm: radio.rsrp ?? dbm,
+          network: radio.network || actToNetwork(operatorMatch?.[2]),
+          band: radio.band || '—',
+          operator: decodeMaybeUCS2(operatorMatch?.[1]?.replace(/\s/g, '') || '') || '未知',
           imei: extractDigits(imei, 14, 17),
           imsi: extractDigits(imsi, 14, 17),
           iccid: extractDigits(iccid, 18, 22),
+          phoneNumber: parseSubscriberNumber(subscriberNumber),
           simState: sim.match(/\+CPIN:\s*([^\n]+)/)?.[1]?.trim() || '未知',
           registration: registrationLabel(epsRegistration || csRegistration),
           firmware: firmware.split('\n').find(line => !/^(AT\+CGMR|OK)$/i.test(line)) || '',
+          rsrp: radio.rsrp,
+          rsrq: radio.rsrq,
+          sinr: radio.sinr,
+          channel: radio.channel,
+          packetService: radio.packetService || parsePacketService(packetAttach),
           updatedAt: new Date().toISOString()
         } satisfies DeviceStatus
       }
@@ -318,6 +369,62 @@ export class DeviceService {
   }
 }
 
+function buildDiagnostics(device: DeviceRecord, raw: Record<string, string>): DeviceDiagnostics {
+  const status = device.status
+  const portReady = device.state === 'online'
+  const simReady = status.simState === 'READY'
+  const registered = status.registration.startsWith('已注册')
+  const hasSignal = status.signal > 0 || (status.rsrp !== undefined && status.rsrp > -140)
+  const checks: DeviceDiagnostics['checks'] = [
+    { id: 'port', label: 'AT 控制端口', state: portReady ? 'pass' : 'error', value: portReady ? `${device.serialPath || device.displayPort} 可通信` : device.lastError || '端口不可用', suggestion: portReady ? undefined : '关闭占用串口的软件，检查驱动后重新扫描。' },
+    { id: 'sim', label: 'SIM 状态', state: simReady ? 'pass' : status.simState.includes('PIN') ? 'warning' : 'error', value: status.simState || '未知', suggestion: simReady ? undefined : '重新插卡并确认卡槽方向；若需要 PIN，请先解锁 SIM。' },
+    { id: 'identity', label: 'SIM 标识读取', state: status.iccid && status.imsi ? 'pass' : simReady ? 'warning' : 'unknown', value: status.iccid && status.imsi ? `ICCID ${maskIdentifier(status.iccid)} · IMSI ${maskIdentifier(status.imsi)}` : 'ICCID/IMSI 不完整', suggestion: status.iccid && status.imsi ? undefined : '刷新状态；部分模组需要厂商专用 ICCID 指令。' },
+    { id: 'signal', label: '射频信号', state: hasSignal ? status.signal >= 25 ? 'pass' : 'warning' : 'error', value: status.rsrp !== undefined ? `RSRP ${status.rsrp} dBm${status.rsrq !== undefined ? ` · RSRQ ${status.rsrq} dB` : ''}${status.sinr !== undefined ? ` · SINR ${status.sinr} dB` : ''}` : `${status.signal}% · ${status.dbm} dBm`, suggestion: hasSignal ? status.signal < 25 ? '信号较弱，调整天线位置或检查馈线。' : undefined : '检查主/分集天线连接，确认飞行模式已关闭。' },
+    { id: 'registration', label: '网络注册', state: registered ? 'pass' : status.registration.includes('搜索') ? 'warning' : 'error', value: `${status.registration} · ${status.operator} · ${status.network}`, suggestion: registered ? undefined : '确认 APN、频段与运营商兼容；必要时执行运营商扫描。' },
+    { id: 'packet', label: '分组数据', state: /attached|connected/i.test(status.packetService || '') ? 'pass' : registered ? 'warning' : 'unknown', value: status.packetService || '未报告', suggestion: registered && !/attached|connected/i.test(status.packetService || '') ? 'SIM 已注册但数据未附着，请检查 APN 和 Windows WWAN 连接。' : undefined }
+  ]
+  const severe = checks.some(check => check.state === 'error')
+  const attention = checks.some(check => check.state === 'warning')
+  return { deviceId: device.id, generatedAt: new Date().toISOString(), summary: !portReady ? 'offline' : severe || attention ? 'attention' : 'healthy', checks, raw }
+}
+
+function maskIdentifier(value: string) {
+  if (value.length < 9) return value
+  return `${value.slice(0, 6)}…${value.slice(-4)}`
+}
+
+function parseRadioMetrics(cesq: string, sierra: string) {
+  const result: { rsrp?: number; rsrq?: number; sinr?: number; band?: string; channel?: string; network?: string; packetService?: string } = {}
+  const cesqMatch = cesq.match(/\+CESQ:\s*\d+,\d+,\d+,\d+,(\d+),(\d+)/)
+  if (cesqMatch) {
+    const rsrqIndex = Number(cesqMatch[1])
+    const rsrpIndex = Number(cesqMatch[2])
+    if (rsrqIndex >= 0 && rsrqIndex <= 34) result.rsrq = roundOne(-19.5 + rsrqIndex * 0.5)
+    if (rsrpIndex >= 0 && rsrpIndex <= 97) result.rsrp = -140 + rsrpIndex
+  }
+  result.rsrp = parseSignedMetric(sierra, /RSRP\s*\(dBm\):\s*(-?\d+(?:\.\d+)?)/i) ?? result.rsrp
+  result.rsrq = parseSignedMetric(sierra, /RSRQ\s*\(dB\):\s*(-?\d+(?:\.\d+)?)/i) ?? result.rsrq
+  result.sinr = parseSignedMetric(sierra, /SINR\s*\(dB\):\s*(-?\d+(?:\.\d+)?)/i)
+  result.band = extractSierraField(sierra, 'LTE band') || sierra.match(/LTE band[^\n]*?B(\d+)/i)?.[1]?.replace(/^/, 'B')
+  result.channel = extractSierraField(sierra, 'LTE Rx chan')
+  result.network = extractSierraField(sierra, 'System mode')
+  result.packetService = extractSierraField(sierra, 'PS state')
+  return result
+}
+
+function parseSignedMetric(value: string, pattern: RegExp) {
+  const matched = value.match(pattern)?.[1]
+  return matched === undefined ? undefined : Number(matched)
+}
+
+function extractSierraField(value: string, label: string) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return value.match(new RegExp(`${escaped}:\\s*([^\\r\\n]+)`, 'i'))?.[1]?.split(/\t| {2,}/)[0]?.trim()
+}
+
+function roundOne(value: number) { return Math.round(value * 10) / 10 }
+function rsrpToPercent(rsrp: number) { return Math.max(0, Math.min(100, Math.round((rsrp + 120) / 40 * 100))) }
+
 function simulateAT(command: string, device: DeviceRecord) {
   const upper = command.toUpperCase()
   if (upper === 'AT') return 'OK'
@@ -326,6 +433,8 @@ function simulateAT(command: string, device: DeviceRecord) {
   if (upper === 'AT+CGSN') return `${device.status.imei}\nOK`
   if (upper === 'AT+CIMI') return `${device.status.imsi}\nOK`
   if (upper === 'AT+CCID') return `+CCID: ${device.status.iccid}\nOK`
+  if (upper === 'AT+CNUM') return `+CNUM: ,"${device.status.phoneNumber || ''}",145\nOK`
+  if (upper === 'AT+CGATT?') return `+CGATT: ${device.networkEnabled === false ? 0 : 1}\nOK`
   if (upper === 'AT+CPIN?') return `+CPIN: ${device.status.simState}\nOK`
   if (upper === 'AT+COPS?') return `+COPS: 0,0,"${device.status.operator}",7\nOK`
   if (upper === 'AT+CREG?') return '+CREG: 0,1\nOK'
@@ -335,6 +444,17 @@ function simulateAT(command: string, device: DeviceRecord) {
 
 function extractDigits(value: string, min: number, max: number) {
   return value.match(new RegExp(`\\d{${min},${max}}`))?.[0] ?? ''
+}
+
+function parseSubscriberNumber(response: string) {
+  const quoted = response.match(/\+CNUM:\s*(?:"[^"]*"\s*,\s*)?"([+\d][\d\s-]{2,24})"/i)?.[1]
+  if (quoted) return quoted.replace(/[\s-]/g, '')
+  return response.match(/(?:^|[^\d+])(\+?\d{5,20})(?!\d)/m)?.[1] || ''
+}
+
+function parsePacketService(response: string) {
+  const attached = response.match(/\+CGATT:\s*([01])/i)?.[1]
+  return attached === '1' ? 'Attached' : attached === '0' ? 'Detached' : undefined
 }
 
 function actToNetwork(value?: string) {
@@ -391,4 +511,65 @@ async function listWindowsModemPorts(): Promise<SerialPortDescriptor[]> {
   } catch {
     return []
   }
+}
+
+type WindowsWwanInterface = { name: string; deviceId: string; connected: boolean }
+
+async function findWindowsWwanInterface(imei?: string, preferredName?: string): Promise<WindowsWwanInterface | undefined> {
+  if (process.platform !== 'win32') return undefined
+  try {
+    const stdout = await runNetsh(['mbn', 'show', 'interfaces'])
+    const blocks = stdout.split(/\r?\n\s*\r?\n/)
+    const interfaces = blocks.flatMap(block => {
+      const name = block.match(/^\s*(?:Name|名称)\s*:\s*(.+)$/mi)?.[1]?.trim()
+      const deviceId = block.match(/^\s*(?:Device Id|设备 ID)\s*:\s*(\d+)$/mi)?.[1]?.trim() || ''
+      return name ? [{ name, deviceId, connected: false }] : []
+    })
+    const selected = interfaces.find(item => imei && item.deviceId === imei) || interfaces.find(item => preferredName && item.name === preferredName) || (interfaces.length === 1 ? interfaces[0] : undefined)
+    if (!selected) return undefined
+    const connection = await runNetsh(['mbn', 'show', 'connection', `interface=${selected.name}`])
+    const state = connection.match(/^\s*(?:Interface State|接口状态)\s*:\s*(.+)$/mi)?.[1]?.trim() || ''
+    selected.connected = /^(?:Connected|已连接)$/i.test(state)
+    return selected
+  } catch {
+    return undefined
+  }
+}
+
+async function setWindowsWwanConnected(interfaceName: string, enabled: boolean) {
+  if (!enabled) {
+    const stdout = await runNetsh(['mbn', 'disconnect', `interface=${interfaceName}`], 20_000)
+    if (/(?:Failure|失败)/i.test(stdout) && !/(?:Context Not Activated|未激活)/i.test(stdout)) throw new Error(`断开 Windows 移动数据失败：${compactNetshError(stdout)}`)
+    return
+  }
+
+  const profile = await findDefaultWwanProfile(interfaceName)
+  if (!profile) throw new Error('Windows 未找到可用的移动数据配置文件，请先在系统“手机网络”中配置 APN')
+  const stdout = await runNetsh(['mbn', 'connect', `interface=${interfaceName}`, 'connmode=name', `name=${profile}`], 30_000)
+  if (/(?:Failure|失败)/i.test(stdout)) throw new Error(`连接 Windows 移动数据失败：${compactNetshError(stdout)}`)
+}
+
+async function findDefaultWwanProfile(interfaceName: string) {
+  const stdout = await runNetsh(['mbn', 'show', 'profiles', `interface=${interfaceName}`])
+  const profiles = stdout.split(/\r?\n/).map(line => line.trim()).filter(line => line && !/Profiles on interface|配置文件|^-+$|:$/.test(line))
+  for (const profile of profiles) {
+    const detail = await runNetsh(['mbn', 'show', 'profile', `interface=${interfaceName}`, `name=${profile}`])
+    if (/(?:Default|默认)\s*:\s*(?:Yes|是)/i.test(detail)) return profile
+  }
+  return profiles.at(-1)
+}
+
+async function runNetsh(args: string[], timeout = 8000) {
+  try {
+    const { stdout } = await execFileAsync('netsh.exe', args, { windowsHide: true, timeout, maxBuffer: 1024 * 1024 })
+    return stdout
+  } catch (error) {
+    const output = (error as { stdout?: string }).stdout
+    if (typeof output === 'string' && output.trim()) return output
+    throw error
+  }
+}
+
+function compactNetshError(value: string) {
+  return value.replace(/\s+/g, ' ').trim().slice(0, 240) || '未知错误'
 }

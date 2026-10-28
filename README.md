@@ -1,8 +1,8 @@
 # VoLink
 
 <p align="center">
-  <strong>A modern Windows desktop control center for 4G/5G cellular modems.</strong><br>
-  Windows 蜂窝模组管理、短信、拨号、eSIM、代理与通知中心。
+  <strong>A modern Windows control center for 4G/5G cellular modems.</strong><br>
+  Windows 蜂窝模块管理、射频诊断、短信、拨号、eSIM、代理与通知中心。
 </p>
 
 <p align="center">
@@ -15,54 +15,55 @@
 
 ![VoLink dialer and modem control center](assets/screenshots/volink-dial.png)
 
-VoLink is an independent Windows desktop implementation inspired by the workflows of VoHive. It discovers real modem ports, talks to modules through AT commands, and puts everyday cellular workflows in one interface.
+VoLink 是一套独立实现的 Windows 蜂窝模块桌面软件。它自动发现真实调制解调器和 AT 串口，通过标准及厂商 AT 指令管理设备，并把网络状态、射频诊断、短信、拨号、eSIM、代理和通知整合到一个界面中。
 
-VoLink 是一套独立实现的 Windows 蜂窝模组桌面软件。它能够自动发现真实模组端口，通过 AT 指令管理设备，并把 SIM、短信、拨号、eSIM、代理和通知整合到同一个界面中。
+## 主要功能
 
-## Highlights / 主要功能
-
-| Feature | Status | Details |
+| 功能 | 状态 | 说明 |
 | --- | --- | --- |
-| Multi-modem discovery | ✅ | Windows Modem + COM auto-discovery, hot-plug rescanning |
-| SIM and network status | ✅ | Signal, operator, IMEI, IMSI, ICCID, registration and firmware |
-| Direct calling | ✅ | Dial with `ATD<number>;`, hang up with `ATH`, local call history |
-| SMS | ✅ | Send, sync, delete and store SMS; GSM/UCS2 support |
-| AT and USSD terminals | ✅ | Raw commands and carrier USSD sessions |
-| eSIM lifecycle | ✅* | Download, enable, disable, rename and delete through `lpac.exe` |
-| HTTP / SOCKS5 proxy | ✅ | Multiple instances, authentication and mobile-interface binding |
-| Notifications | ✅ | Telegram, Feishu, QQ Bot, Bark, Email, PushPlus and Webhook |
-| Card policy | ✅ | APN, IP version, cellular network and airplane-mode controls |
-| VoWiFi / IMS | Capability-gated | UI and policy model included; requires a separate carrier-compatible IMS backend |
+| 多模块发现 | ✅ | Windows Modem + COM 自动发现、热插拔扫描、手动端口选择 |
+| SIM 与网络状态 | ✅ | 运营商、IMEI、IMSI、ICCID、注册状态和固件版本 |
+| 专业射频指标 | ✅ | CSQ、dBm、RSRP、RSRQ、SINR、LTE 频段和信道（取决于模块支持） |
+| 本机号码 | ✅ | 使用 `AT+CNUM` 自动读取；运营商未写入号码时支持手动补录 |
+| 一键设备诊断 | ✅ | 检查 AT 端口、SIM、标识读取、信号、网络注册和分组数据 |
+| 直接拨号 | ✅ | `ATD<number>;` 拨号、`ATH` 挂断、本地通话记录 |
+| 短信 | ✅ | 发送、同步、删除和本地存储，支持 GSM/UCS2 |
+| AT / USSD 终端 | ✅ | 原始 AT 指令和运营商 USSD 会话 |
+| eSIM 生命周期 | 条件支持 | 通过 `lpac.exe` 下载、启用、禁用、改名和删除 Profile |
+| HTTP / SOCKS5 代理 | ✅ | 多实例、认证和移动网络接口绑定 |
+| 通知 | ✅ | Telegram、飞书、QQ Bot、Bark、Email、PushPlus、Webhook |
+| 卡策略 | ✅ | APN、IP 版本、蜂窝网络和飞行模式控制 |
+| 独立流量开关 | ✅ | 断开 Windows WWAN/PDP 数据会话，保持蜂窝注册、信号、短信和语音射频 |
+| 在线更新检查 | ✅ | 从 GitHub Releases 查询新版本并打开安全下载地址 |
+| VoWiFi / IMS | 能力受限 | 已有策略界面；真实通话需要运营商、模块固件及独立 IMS 后端配合 |
 
-`*` eSIM requires a compatible eUICC module, `AT+CSIM`, and a configured `lpac.exe`.
+> eSIM 需要兼容 eUICC、`AT+CSIM` 和已配置的 `lpac.exe`。拨号不等于电脑一定有通话音频；音频还取决于模块的语音固件、USB Audio 或厂商音频通道。
 
-## Tested hardware / 已验证硬件
+## 已验证硬件
 
-- Sierra Wireless EM7430 — modem discovery, COM17 AT control, SIM READY, ICCID/IMSI/IMEI reading
-- Generic AT-compatible Quectel/SIMCom/Fibocom/Huawei/ZTE/Telit devices should work, but community hardware reports are welcome
+- Sierra Wireless EM7430：COM AT 控制、SIM READY、ICCID/IMSI/IMEI 读取、短信和拨号指令
+- Quectel、SIMCom、Fibocom、Huawei、ZTE、Telit 等标准 AT 模块具备通用适配逻辑，欢迎提交实际兼容报告
 
-If your module works, please open a [hardware compatibility report](https://github.com/w330590751/VoLink/issues/new?template=hardware.yml). It helps other users and improves automatic detection.
+如果你的模块可用，请提交一份 [硬件兼容报告](https://github.com/w330590751/VoLink/issues/new?template=hardware.yml)。请在分享日志前遮盖电话号码、IMSI、ICCID 和 IMEI。
 
-## Download / 下载
+## 下载
 
-Download the latest portable Windows build from [GitHub Releases](https://github.com/w330590751/VoLink/releases/latest). No installation is required.
+从 [GitHub Releases](https://github.com/w330590751/VoLink/releases/latest) 下载最新 Windows x64 便携版，双击即可运行，无需安装。
 
-从 [GitHub Releases](https://github.com/w330590751/VoLink/releases/latest) 下载最新便携版，双击即可运行，无需安装。
+> 当前 EXE 尚未购买商业代码签名证书，Windows SmartScreen 可能显示“未知发布者”。
 
-> The executable is not commercially code-signed yet. Windows SmartScreen may show an “Unknown publisher” warning.
+## 使用真实模块
 
-## Using real hardware / 使用真实硬件
+1. 安装模块厂商提供的 USB 串口和 WWAN 驱动。
+2. 启动 VoLink，在“系统设置”关闭模拟模式，并保持自动扫描开启。
+3. 插入模块，等待自动扫描；也可以手动选择 AT 端口。
+4. 连接主/分集天线。SIM READY 但无法注册时，请检查 APN、频段和运营商兼容性。
+5. 在设备概览点击“运行诊断”，查看端口、SIM、射频和注册状态的具体建议。
+6. 语音通话需要支持 Voice/VoLTE 的模块固件；电脑音频还需要可用的音频通道。
 
-1. Install the USB serial and WWAN drivers supplied by the modem vendor.
-2. Start VoLink, open **System Settings**, disable simulation mode, and keep auto-scan enabled.
-3. Insert the module. It should appear within one scan interval; the AT port can also be selected manually.
-4. Connect the LTE/5G antennas and configure the correct APN when SIM is READY but signal or registration is unavailable.
-5. Voice calls require voice-capable firmware. PC audio additionally requires USB Audio or the vendor's audio path.
-6. eSIM requires a compatible eUICC and the full path to `lpac.exe` in settings.
+## 开发与构建
 
-## Development / 开发构建
-
-Requirements: Node.js 22+ and Windows 10/11.
+要求：Node.js 22+、Windows 10/11。
 
 ```powershell
 npm install
@@ -70,35 +71,39 @@ npm run typecheck
 npm run dev
 ```
 
-Build the portable EXE:
+构建便携 EXE：
 
 ```powershell
 npm run dist
 ```
 
-Output: `release/VoLink-1.0.0-portable.exe`
+输出：`release/VoLink-1.1.2-portable.exe`
 
-## Architecture
+## 架构
 
-- Electron main process: hardware discovery, serial AT sessions, SMS, calls, proxy and notifications
-- React renderer: VoHive-style device workspace and management UI
-- Local JSON store: settings, devices, messages, call records and logs
-- Context-isolated preload bridge: typed IPC between UI and hardware services
+- Electron 主进程：硬件发现、串口 AT 会话、短信、通话、代理、通知和更新检查
+- React 渲染进程：设备工作台、射频诊断和管理界面
+- 本地 JSON 存储：设置、设备、短信、通话记录和日志
+- Context Isolation preload：类型化 IPC，界面不直接获得 Node.js 权限
 
-## Roadmap
+## 与 VoCat 的关系
 
-- More tested modem profiles and automatic AT-port classification
-- Native Windows Mobile Broadband / MBIM telemetry
-- Incoming-call events and audio-device routing
-- Carrier-specific VoLTE / IMS capability detection
-- Signed installer and automatic updates
+VoLink 参考了同类开源/可查看项目的产品思路，但代码为独立实现。与 VoCat 的功能和技术差异、适合借鉴的方向及许可边界，见 [VoCat 项目分析](docs/VOCAT_ANALYSIS.zh-CN.md)。VoLink 不包含 VoCat、VoHive 或第三方 VoWiFi 守护程序源码。
 
-## Contributing
+## 路线图
 
-Bug reports, modem traces with identifiers removed, translations and hardware support patches are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+- 扩充实际测试的模块配置和 AT 端口自动分类
+- Windows Mobile Broadband / MBIM 原生遥测
+- 来电事件和音频设备路由
+- 运营商 VoLTE / IMS 能力检测
+- 代码签名、增量更新和崩溃报告（默认保护隐私）
 
-If VoLink is useful to you, consider starring the repository and sharing your tested modem model. ⭐
+## 参与贡献
 
-## License and attribution
+欢迎提交 Bug、已脱敏的模块日志、翻译和硬件支持补丁。提交前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-VoLink is licensed under the [MIT License](LICENSE). It is an independent implementation and does not include VoHive source code or third-party AGPL VoWiFi daemons.
+如果 VoLink 对你有帮助，欢迎 Star 仓库并分享已验证的模块型号。⭐
+
+## 许可
+
+VoLink 使用 [MIT License](LICENSE)。

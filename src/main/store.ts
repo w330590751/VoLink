@@ -105,6 +105,18 @@ export class AppStore {
     return entry
   }
 
+  async deleteLog(id: string) {
+    if (!this.data.logs.some(log => log.id === id)) return false
+    await this.update(draft => { draft.logs = draft.logs.filter(log => log.id !== id) })
+    return true
+  }
+
+  async clearLogs() {
+    const deleted = this.data.logs.length
+    if (deleted) await this.update(draft => { draft.logs = [] })
+    return deleted
+  }
+
   private persist() {
     this.writeQueue = this.writeQueue.then(async () => {
       const tempPath = `${this.filePath}.tmp`

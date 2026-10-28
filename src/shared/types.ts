@@ -32,7 +32,39 @@ export type DeviceStatus = {
   simState: string
   registration: string
   firmware: string
+  phoneNumber?: string
+  rsrp?: number
+  rsrq?: number
+  sinr?: number
+  channel?: string
+  packetService?: string
   updatedAt: string
+}
+
+export type DiagnosticCheck = {
+  id: string
+  label: string
+  state: 'pass' | 'warning' | 'error' | 'unknown'
+  value: string
+  suggestion?: string
+}
+
+export type DeviceDiagnostics = {
+  deviceId: string
+  generatedAt: string
+  summary: 'healthy' | 'attention' | 'offline'
+  checks: DiagnosticCheck[]
+  raw: Record<string, string>
+}
+
+export type UpdateInfo = {
+  currentVersion: string
+  latestVersion: string
+  available: boolean
+  releaseUrl: string
+  downloadUrl?: string
+  publishedAt?: string
+  checkedAt: string
 }
 
 export type DeviceRecord = {
@@ -56,6 +88,7 @@ export type DeviceRecord = {
   publicIp?: string
   publicIpv6?: string
   cardIccid?: string
+  phoneNumberOverride?: string
   capabilities: DeviceCapabilities
   status: DeviceStatus
   lastError?: string
@@ -101,6 +134,7 @@ export type SmsMessage = {
   timestamp: string
   unread?: boolean
   modemIndex?: number
+  modemIndexes?: number[]
 }
 
 export type ProxyProtocol = 'http' | 'socks5'
@@ -206,7 +240,7 @@ export type USSDResult = {
 
 export type DevicePatch = Partial<Pick<DeviceRecord,
   'name' | 'serialPath' | 'enabled' | 'autoConnect' | 'networkInterface' | 'backend' |
-  'ipVersion' | 'apn' | 'networkEnabled' | 'vowifiEnabled' | 'airplaneEnabled' | 'cardIccid'
+  'ipVersion' | 'apn' | 'networkEnabled' | 'vowifiEnabled' | 'airplaneEnabled' | 'cardIccid' | 'phoneNumberOverride'
 >>
 
 export type ProxyInput = Omit<ProxyInstance, 'id' | 'status' | 'connections' | 'bytesUp' | 'bytesDown' | 'lastError'> & { id?: string }
@@ -224,11 +258,15 @@ export interface VoLinkAPI {
   cancelUSSD(deviceId: string): Promise<boolean>
   rebootDevice(deviceId: string): Promise<boolean>
   setFlightMode(deviceId: string, enabled: boolean): Promise<boolean>
+  setDataEnabled(deviceId: string, enabled: boolean): Promise<boolean>
   scanOperators(deviceId: string): Promise<string[]>
   selectOperator(deviceId: string, plmn?: string): Promise<boolean>
+  diagnoseDevice(deviceId: string): Promise<DeviceDiagnostics>
   sendSMS(deviceId: string, recipient: string, body: string): Promise<SmsMessage>
   refreshSMS(deviceId: string): Promise<SmsMessage[]>
   deleteSMS(id: string): Promise<boolean>
+  deleteLog(id: string): Promise<boolean>
+  clearLogs(): Promise<number>
   dial(deviceId: string, number: string): Promise<{ state: CallState; number: string; transport: string }>
   hangup(): Promise<{ state: CallState }>
   callStatus(): Promise<CallState>
@@ -243,5 +281,7 @@ export interface VoLinkAPI {
   deleteEsim(id: string): Promise<boolean>
   updateSettings(settings: Partial<AppSettings>): Promise<AppSettings>
   testNotification(): Promise<boolean>
+  checkForUpdates(): Promise<UpdateInfo>
+  openExternal(url: string): Promise<boolean>
   listPorts(): Promise<SerialPortDescriptor[]>
 }
