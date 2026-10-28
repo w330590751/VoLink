@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, Bell, Bot, CircleGauge, Database, Download, ExternalLink, FileText, Globe2, Mail, MessageSquareText, Plus,
   Radio, RefreshCw, Save, Search, Send, Server, Settings2, ShieldCheck, Signal, Smartphone,
@@ -34,7 +34,24 @@ function UpstreamProxyPanel(){const [enabled,setEnabled]=useState(false);return 
 
 export function SmsPage({snapshot,busy,action}:PageProps){const [query,setQuery]=useState('');const [deviceId,setDeviceId]=useState(snapshot.devices[0]?.id||'');const [recipient,setRecipient]=useState('');const [body,setBody]=useState('');const list=useMemo(()=>snapshot.messages.filter(item=>item.deviceId===deviceId&&`${item.sender}${item.recipient}${item.body}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())),[snapshot.messages,deviceId,query]);return <div className="page-stack"><div className="page-heading"><div><h1>短信中心</h1><p>中文、数字、多行和长短信会自动解码与合并</p></div><button className="primary" disabled={!deviceId||busy} onClick={()=>void action(()=>window.voLink!.refreshSMS(deviceId),'短信已同步')}><RefreshCw size={16}/>同步短信</button></div><div className="sms-center"><Panel className="conversation-list"><div className="searchbox"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索号码或短信"/></div>{list.length?list.map(message=><SmsRow key={message.id} message={message} busy={busy} action={action}/>):<Empty title="暂无短信"/>}</Panel><Panel><SectionTitle icon={<Send/>} title="发送短信" subtitle="支持 GSM 与中文 UCS2 编码"/><Field label="发送设备"><select value={deviceId} onChange={e=>setDeviceId(e.target.value)}>{snapshot.devices.map(device=><option value={device.id} key={device.id}>{device.name} · {device.status.operator}</option>)}</select></Field><Field label="收件号码"><input value={recipient} onChange={e=>setRecipient(e.target.value)} placeholder="+8613800138000"/></Field><Field label="短信内容"><textarea rows={9} value={body} onChange={e=>setBody(e.target.value)} placeholder="输入短信内容"/></Field><div className="panel-footer"><small>{body.length} 字</small><button className="primary" disabled={busy||!recipient||!body||!deviceId} onClick={()=>void action(async()=>{const result=await window.voLink!.sendSMS(deviceId,recipient,body);setBody('');return result},'短信已发送')}><Send size={16}/>发送</button></div></Panel></div></div>}
 
-function SmsRow({message,busy,action}:{message:PageProps['snapshot']['messages'][number];busy:boolean;action:PageProps['action']}){const address=message.direction==='inbound'?message.sender:message.recipient;const status=message.direction==='inbound'?(message.unread?'未读':'已收'):message.status==='sent'?'已发送':message.status==='failed'?'失败':'排队中';return <article className={`conversation ${message.direction}`}><span>{message.direction==='inbound'?'收':'发'}</span><div><div className="message-meta"><strong>{address||'未知号码'}</strong><em>{status}</em></div><p>{message.body||'（空短信）'}</p><small>{formatDate(message.timestamp)}{(message.modemIndexes?.length||0)>1?` · 已合并 ${message.modemIndexes!.length} 段`:''}</small></div><button disabled={busy} title="删除短信" onClick={()=>void action(()=>window.voLink!.deleteSMS(message.id),'短信已删除')}><Trash2 size={15}/></button></article>}
+function SmsRow({message,busy,action}:{message:PageProps['snapshot']['messages'][number];busy:boolean;action:PageProps['action']}){
+  const [expanded,setExpanded]=useState(false)
+  const [canExpand,setCanExpand]=useState(false)
+  const bodyRef=useRef<HTMLParagraphElement>(null)
+  const address=message.direction==='inbound'?message.sender:message.recipient
+  const status=message.direction==='inbound'?(message.unread?'未读':'已收'):message.status==='sent'?'已发送':message.status==='failed'?'失败':'排队中'
+  const bodyId=`sms-body-${message.id}`
+  useLayoutEffect(()=>{
+    const body=bodyRef.current
+    if(!body||expanded)return
+    const checkOverflow=()=>setCanExpand(body.scrollHeight>body.clientHeight+1)
+    checkOverflow()
+    const observer=new ResizeObserver(checkOverflow)
+    observer.observe(body)
+    return()=>observer.disconnect()
+  },[expanded,message.body])
+  return <article className={`conversation ${message.direction}`}><span>{message.direction==='inbound'?'收':'发'}</span><div><div className="message-meta"><strong>{address||'未知号码'}</strong><em>{status}</em></div><p id={bodyId} ref={bodyRef} className={expanded?'expanded':''}>{message.body||'（空短信）'}</p>{canExpand?<button type="button" className="message-expand" aria-expanded={expanded} aria-controls={bodyId} onClick={()=>setExpanded(value=>!value)}>{expanded?'收起':'展开全文'}</button>:null}<small>{formatDate(message.timestamp)}{(message.modemIndexes?.length||0)>1?` · 已合并 ${message.modemIndexes!.length} 段`:''}</small></div><button disabled={busy} title="删除短信" onClick={()=>void action(()=>window.voLink!.deleteSMS(message.id),'短信已删除')}><Trash2 size={15}/></button></article>
+}
 
 export function LogsPage({snapshot}:PageProps){const [level,setLevel]=useState('all');const rows=snapshot.logs.filter(log=>level==='all'||log.level===level);return <div className="page-stack"><div className="page-heading"><div><h1>实时日志</h1><p>设备、短信、代理和系统运行记录</p></div><select className="small-select" value={level} onChange={e=>setLevel(e.target.value)}><option value="all">全部级别</option><option value="info">INFO</option><option value="warn">WARN</option><option value="error">ERROR</option></select></div><Panel className="logs-panel"><div className="logs-header"><span>时间</span><span>级别</span><span>模块</span><span>消息</span><span>详情</span></div>{rows.map(log=><div className={`logs-row ${log.level}`} key={log.id}><time>{formatDate(log.timestamp)}</time><b>{log.level.toUpperCase()}</b><span>{log.scope}</span><strong>{log.message}</strong><small>{log.details}</small></div>)}</Panel></div>}
 

@@ -3,7 +3,7 @@ import { AppStore } from './store.js'
 import { DeviceService } from './device-service.js'
 import { withATSession } from './at-channel.js'
 import { sendConfiguredNotification } from './notification-service.js'
-import { parseTextModeSMS } from './sms-codec.js'
+import { parsePduModeSMS, parseTextModeSMS } from './sms-codec.js'
 
 export class SMSService {
   constructor(private readonly store: AppStore, private readonly devices: DeviceService) {}
@@ -61,19 +61,25 @@ export class SMSService {
     if (device.mode === 'simulation') return this.store.snapshot().messages.filter(message => message.deviceId === deviceId)
     if (!device.serialPath) throw new Error('设备未配置串口')
 
-    const response = await withATSession(device.serialPath, async session => {
-      await session.command('AT+CMGF=1')
-      const charset = await session.command('AT+CSCS="UCS2"').then(() => 'UCS2' as const).catch(async () => {
-        await session.command('AT+CSCS="GSM"').catch(() => undefined)
-        return 'GSM' as const
-      })
+    const received = await withATSession(device.serialPath, async session => {
       try {
-        return { charset, response: await session.command('AT+CMGL="ALL"', 15_000) }
+        await session.command('AT+CMGF=0')
+        const response = await session.command('AT+CMGL=4', 15_000)
+        const messages = parsePduModeSMS(response, deviceId)
+        if (response.includes('+CMGL:') && !messages.length) throw new Error('PDU 短信解析失败')
+        return messages
+      } catch {
+        await session.command('AT+CMGF=1')
+        const charset = await session.command('AT+CSCS="UCS2"').then(() => 'UCS2' as const).catch(async () => {
+          await session.command('AT+CSCS="GSM"').catch(() => undefined)
+          return 'GSM' as const
+        })
+        return parseTextModeSMS(await session.command('AT+CMGL="ALL"', 15_000), deviceId, charset)
       } finally {
-        if (charset === 'UCS2') await session.command('AT+CSCS="GSM"').catch(() => undefined)
+        await session.command('AT+CMGF=1').catch(() => undefined)
+        await session.command('AT+CSCS="GSM"').catch(() => undefined)
       }
     })
-    const received = parseTextModeSMS(response.response, deviceId, response.charset)
     const existing = this.store.snapshot().messages
     const knownIndexes = new Set(existing.filter(item => item.deviceId === deviceId).flatMap(item => item.modemIndexes ?? (item.modemIndex === undefined ? [] : [item.modemIndex])))
     const fresh = received.filter(item => !(item.modemIndexes ?? []).some(index => knownIndexes.has(index)))
