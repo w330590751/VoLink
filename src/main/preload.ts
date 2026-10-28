@@ -12,6 +12,7 @@ const api: VoLinkAPI = {
   cancelUSSD: id => ipcRenderer.invoke('device:ussd-cancel', id),
   rebootDevice: id => ipcRenderer.invoke('device:reboot', id),
   setFlightMode: (id, enabled) => ipcRenderer.invoke('device:flight-mode', id, enabled),
+  setDataEnabled: (id, enabled) => ipcRenderer.invoke('device:data-enabled', id, enabled),
   scanOperators: id => ipcRenderer.invoke('device:operators-scan', id),
   selectOperator: (id, plmn) => ipcRenderer.invoke('device:operator-select', id, plmn),
   diagnoseDevice: id => ipcRenderer.invoke('device:diagnose', id),

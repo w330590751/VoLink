@@ -3,6 +3,7 @@ import { AppStore } from './store.js'
 import { DeviceService } from './device-service.js'
 import { withATSession } from './at-channel.js'
 import { sendConfiguredNotification } from './notification-service.js'
+import { parseTextModeSMS } from './sms-codec.js'
 
 export class SMSService {
   constructor(private readonly store: AppStore, private readonly devices: DeviceService) {}
@@ -62,18 +63,29 @@ export class SMSService {
 
     const response = await withATSession(device.serialPath, async session => {
       await session.command('AT+CMGF=1')
-      await session.command('AT+CSCS="GSM"').catch(() => undefined)
-      return session.command('AT+CMGL="ALL"', 15_000)
+      const charset = await session.command('AT+CSCS="UCS2"').then(() => 'UCS2' as const).catch(async () => {
+        await session.command('AT+CSCS="GSM"').catch(() => undefined)
+        return 'GSM' as const
+      })
+      try {
+        return { charset, response: await session.command('AT+CMGL="ALL"', 15_000) }
+      } finally {
+        if (charset === 'UCS2') await session.command('AT+CSCS="GSM"').catch(() => undefined)
+      }
     })
-    const received = parseTextModeSMS(response, deviceId)
+    const received = parseTextModeSMS(response.response, deviceId, response.charset)
     const existing = this.store.snapshot().messages
-    const knownIndexes = new Set(existing.filter(item => item.deviceId === deviceId && item.modemIndex !== undefined).map(item => item.modemIndex))
-    const fresh = received.filter(item => !knownIndexes.has(item.modemIndex))
+    const knownIndexes = new Set(existing.filter(item => item.deviceId === deviceId).flatMap(item => item.modemIndexes ?? (item.modemIndex === undefined ? [] : [item.modemIndex])))
+    const fresh = received.filter(item => !(item.modemIndexes ?? []).some(index => knownIndexes.has(index)))
+    await this.store.update(draft => {
+      draft.messages = draft.messages.filter(item => item.deviceId !== deviceId || (item.modemIndex === undefined && !item.modemIndexes?.length))
+      draft.messages.unshift(...received)
+    })
     if (fresh.length) {
-      await this.store.update(draft => { draft.messages.unshift(...fresh) })
       await this.notify(fresh)
       await this.store.log('info', 'sms', `收到 ${fresh.length} 条新短信`, `device=${device.name}`)
     }
+    await this.store.log('info', 'sms', `短信同步完成，共 ${received.length} 条`, `device=${device.name}`)
     return this.store.snapshot().messages.filter(message => message.deviceId === deviceId)
   }
 
@@ -81,8 +93,11 @@ export class SMSService {
     const message = this.store.snapshot().messages.find(item => item.id === id)
     if (!message) return false
     const device = this.devices.requireDevice(message.deviceId)
-    if (message.modemIndex !== undefined && device.mode === 'serial' && device.serialPath) {
-      await withATSession(device.serialPath, session => session.command(`AT+CMGD=${message.modemIndex}`, 5000)).catch(() => undefined)
+    const modemIndexes = message.modemIndexes ?? (message.modemIndex === undefined ? [] : [message.modemIndex])
+    if (modemIndexes.length && device.mode === 'serial' && device.serialPath) {
+      await withATSession(device.serialPath, async session => {
+        for (const index of modemIndexes) await session.command(`AT+CMGD=${index}`, 5000).catch(() => undefined)
+      }).catch(() => undefined)
     }
     await this.store.update(draft => { draft.messages = draft.messages.filter(item => item.id !== id) })
     return true
@@ -102,37 +117,6 @@ export class SMSService {
   }
 }
 
-function parseTextModeSMS(response: string, deviceId: string) {
-  const lines = response.split('\n')
-  const messages: SmsMessage[] = []
-  for (let index = 0; index < lines.length; index += 1) {
-    const header = lines[index].match(/^\+CMGL:\s*(\d+),"([^"]*)","([^"]*)"(?:,"[^"]*")?(?:,"([^"]*)")?/)
-    if (!header) continue
-    const body = decodeUCS2(lines[index + 1] ?? '')
-    messages.push({
-      id: crypto.randomUUID(), deviceId, sender: decodeUCS2(header[3]), recipient: '', body,
-      direction: 'inbound', status: 'received', timestamp: normalizeTimestamp(header[4]), unread: true,
-      modemIndex: Number(header[1])
-    })
-  }
-  return messages
-}
-
 function encodeUCS2(value: string) {
   return [...value].map(character => character.charCodeAt(0).toString(16).padStart(4, '0')).join('').toUpperCase()
-}
-
-function decodeUCS2(value: string) {
-  const trimmed = value.trim()
-  if (!/^[0-9A-F]+$/i.test(trimmed) || trimmed.length % 4 !== 0) return trimmed
-  let result = ''
-  for (let index = 0; index < trimmed.length; index += 4) result += String.fromCharCode(Number.parseInt(trimmed.slice(index, index + 4), 16))
-  return result
-}
-
-function normalizeTimestamp(value?: string) {
-  if (!value) return new Date().toISOString()
-  const match = value.match(/(\d{2})\/(\d{2})\/(\d{2}),(\d{2}):(\d{2}):(\d{2})/)
-  if (!match) return new Date().toISOString()
-  return new Date(2000 + Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), Number(match[6])).toISOString()
 }

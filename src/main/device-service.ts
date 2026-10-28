@@ -38,13 +38,13 @@ const simulationDevices = (): DeviceRecord[] => [
     id: 'sim-ec25', name: '主卡模组', model: 'EC25-A', manufacturer: 'Quectel', displayPort: '模拟 COM3', mode: 'simulation',
     state: 'online', enabled: true, autoConnect: true,
     capabilities: { sms: true, voice: true, ussd: true, esim: false, vowifi: false, rawAT: true },
-    status: { signal: 92, dbm: -67, network: '5G NSA', band: 'n78', operator: '中国移动', imei: '866123045678912', imsi: '460001234567890', iccid: '8986001234567890123', simState: 'READY', registration: '已注册', firmware: 'EC25EFAR06A12M4G', updatedAt: new Date().toISOString() }
+    status: { signal: 92, dbm: -67, network: '5G NSA', band: 'n78', operator: '中国移动', imei: '866123045678912', imsi: '460001234567890', iccid: '8986001234567890123', phoneNumber: '13800138000', simState: 'READY', registration: '已注册', firmware: 'EC25EFAR06A12M4G', updatedAt: new Date().toISOString() }
   },
   {
     id: 'sim-ec20', name: '短信模组', model: 'EC20-C', manufacturer: 'Quectel', displayPort: '模拟 COM5', mode: 'simulation',
     state: 'online', enabled: true, autoConnect: true,
     capabilities: { sms: true, voice: true, ussd: true, esim: true, vowifi: true, rawAT: true },
-    status: { signal: 61, dbm: -81, network: '4G LTE', band: 'B3', operator: '中国联通', imei: '860512040123456', imsi: '460011234567890', iccid: '8986011234567890123', simState: 'READY', registration: '已注册', firmware: 'EC20CEHCLGR08A09M1G', updatedAt: new Date().toISOString() }
+    status: { signal: 61, dbm: -81, network: '4G LTE', band: 'B3', operator: '中国联通', imei: '860512040123456', imsi: '460011234567890', iccid: '8986011234567890123', phoneNumber: '13000100000', simState: 'READY', registration: '已注册', firmware: 'EC20CEHCLGR08A09M1G', updatedAt: new Date().toISOString() }
   }
 ]
 
@@ -250,6 +250,17 @@ export class DeviceService {
     return true
   }
 
+  async setDataEnabled(deviceId: string, enabled: boolean) {
+    const device = this.requireDevice(deviceId)
+    if (device.airplaneEnabled && enabled) throw new Error('请先关闭飞行模式，再开启移动数据')
+    if (device.mode !== 'simulation') {
+      await this.executeAT(deviceId, enabled ? 'AT+CGATT=1' : 'AT+CGATT=0', 30_000)
+    }
+    await this.updateDevice(deviceId, { networkEnabled: enabled })
+    await this.store.log('info', 'device', `${device.name} 移动数据已${enabled ? '开启' : '关闭'}`, '使用分组数据附着控制，短信与语音射频保持可用')
+    return true
+  }
+
   async scanOperators(deviceId: string) {
     const result = await this.executeAT(deviceId, 'AT+COPS=?', 90_000)
     return [...result.response.matchAll(/\(\d+,"[^"]*","[^"]*","(\d{5,6})"/g)].map(match => match[1])
@@ -292,10 +303,12 @@ export class DeviceService {
       const imei = await query('AT+CGSN')
       const sim = await query('AT+CPIN?')
       const iccid = await query('AT+CCID')
+      const subscriberNumber = await query('AT+CNUM')
       const imsi = await query('AT+CIMI')
       const signal = await query('AT+CSQ')
       const extendedSignal = await query('AT+CESQ')
       const operator = await query('AT+COPS?')
+      const packetAttach = await query('AT+CGATT?')
       const epsRegistration = await query('AT+CEREG?')
       const csRegistration = await query('AT+CREG?')
       const firmware = await query('AT+CGMR')
@@ -315,10 +328,11 @@ export class DeviceService {
           dbm: radio.rsrp ?? dbm,
           network: radio.network || actToNetwork(operatorMatch?.[2]),
           band: radio.band || '—',
-          operator: operatorMatch?.[1] || '未知',
+          operator: decodeMaybeUCS2(operatorMatch?.[1]?.replace(/\s/g, '') || '') || '未知',
           imei: extractDigits(imei, 14, 17),
           imsi: extractDigits(imsi, 14, 17),
           iccid: extractDigits(iccid, 18, 22),
+          phoneNumber: parseSubscriberNumber(subscriberNumber),
           simState: sim.match(/\+CPIN:\s*([^\n]+)/)?.[1]?.trim() || '未知',
           registration: registrationLabel(epsRegistration || csRegistration),
           firmware: firmware.split('\n').find(line => !/^(AT\+CGMR|OK)$/i.test(line)) || '',
@@ -326,7 +340,7 @@ export class DeviceService {
           rsrq: radio.rsrq,
           sinr: radio.sinr,
           channel: radio.channel,
-          packetService: radio.packetService,
+          packetService: radio.packetService || parsePacketService(packetAttach),
           updatedAt: new Date().toISOString()
         } satisfies DeviceStatus
       }
@@ -377,19 +391,24 @@ function parseRadioMetrics(cesq: string, sierra: string) {
     if (rsrqIndex >= 0 && rsrqIndex <= 34) result.rsrq = roundOne(-19.5 + rsrqIndex * 0.5)
     if (rsrpIndex >= 0 && rsrpIndex <= 97) result.rsrp = -140 + rsrpIndex
   }
-  result.rsrp = parseSignedMetric(sierra, /RSRP[^\n]*?(-?\d+(?:\.\d+)?)\s*dBm/i) ?? result.rsrp
-  result.rsrq = parseSignedMetric(sierra, /RSRQ[^\n]*?(-?\d+(?:\.\d+)?)\s*dB/i) ?? result.rsrq
-  result.sinr = parseSignedMetric(sierra, /SINR[^\n]*?(-?\d+(?:\.\d+)?)\s*dB/i)
-  result.band = sierra.match(/LTE band:\s*([^\r\n]+)/i)?.[1]?.trim() || sierra.match(/LTE band[^\n]*?B(\d+)/i)?.[1]?.replace(/^/, 'B')
-  result.channel = sierra.match(/LTE Rx chan:\s*(\d+)/i)?.[1]
-  result.network = sierra.match(/System mode:\s*([^\r\n]+)/i)?.[1]?.trim()
-  result.packetService = sierra.match(/PS state:\s*([^\r\n]+)/i)?.[1]?.trim()
+  result.rsrp = parseSignedMetric(sierra, /RSRP\s*\(dBm\):\s*(-?\d+(?:\.\d+)?)/i) ?? result.rsrp
+  result.rsrq = parseSignedMetric(sierra, /RSRQ\s*\(dB\):\s*(-?\d+(?:\.\d+)?)/i) ?? result.rsrq
+  result.sinr = parseSignedMetric(sierra, /SINR\s*\(dB\):\s*(-?\d+(?:\.\d+)?)/i)
+  result.band = extractSierraField(sierra, 'LTE band') || sierra.match(/LTE band[^\n]*?B(\d+)/i)?.[1]?.replace(/^/, 'B')
+  result.channel = extractSierraField(sierra, 'LTE Rx chan')
+  result.network = extractSierraField(sierra, 'System mode')
+  result.packetService = extractSierraField(sierra, 'PS state')
   return result
 }
 
 function parseSignedMetric(value: string, pattern: RegExp) {
   const matched = value.match(pattern)?.[1]
   return matched === undefined ? undefined : Number(matched)
+}
+
+function extractSierraField(value: string, label: string) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return value.match(new RegExp(`${escaped}:\\s*([^\\r\\n]+)`, 'i'))?.[1]?.split(/\t| {2,}/)[0]?.trim()
 }
 
 function roundOne(value: number) { return Math.round(value * 10) / 10 }
@@ -403,6 +422,8 @@ function simulateAT(command: string, device: DeviceRecord) {
   if (upper === 'AT+CGSN') return `${device.status.imei}\nOK`
   if (upper === 'AT+CIMI') return `${device.status.imsi}\nOK`
   if (upper === 'AT+CCID') return `+CCID: ${device.status.iccid}\nOK`
+  if (upper === 'AT+CNUM') return `+CNUM: ,"${device.status.phoneNumber || ''}",145\nOK`
+  if (upper === 'AT+CGATT?') return `+CGATT: ${device.networkEnabled === false ? 0 : 1}\nOK`
   if (upper === 'AT+CPIN?') return `+CPIN: ${device.status.simState}\nOK`
   if (upper === 'AT+COPS?') return `+COPS: 0,0,"${device.status.operator}",7\nOK`
   if (upper === 'AT+CREG?') return '+CREG: 0,1\nOK'
@@ -412,6 +433,17 @@ function simulateAT(command: string, device: DeviceRecord) {
 
 function extractDigits(value: string, min: number, max: number) {
   return value.match(new RegExp(`\\d{${min},${max}}`))?.[0] ?? ''
+}
+
+function parseSubscriberNumber(response: string) {
+  const quoted = response.match(/\+CNUM:\s*(?:"[^"]*"\s*,\s*)?"([+\d][\d\s-]{2,24})"/i)?.[1]
+  if (quoted) return quoted.replace(/[\s-]/g, '')
+  return response.match(/(?:^|[^\d+])(\+?\d{5,20})(?!\d)/m)?.[1] || ''
+}
+
+function parsePacketService(response: string) {
+  const attached = response.match(/\+CGATT:\s*([01])/i)?.[1]
+  return attached === '1' ? 'Attached' : attached === '0' ? 'Detached' : undefined
 }
 
 function actToNetwork(value?: string) {

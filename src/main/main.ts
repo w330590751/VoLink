@@ -75,6 +75,7 @@ function registerIPC(current: NonNullable<typeof services>) {
   ipcMain.handle('device:ussd-cancel', (_, id: string) => devices.cancelUSSD(id))
   ipcMain.handle('device:reboot', (_, id: string) => devices.reboot(id))
   ipcMain.handle('device:flight-mode', (_, id: string, enabled: boolean) => devices.setFlightMode(id, enabled))
+  ipcMain.handle('device:data-enabled', (_, id: string, enabled: boolean) => devices.setDataEnabled(id, enabled))
   ipcMain.handle('device:operators-scan', (_, id: string) => devices.scanOperators(id))
   ipcMain.handle('device:operator-select', (_, id: string, plmn?: string) => devices.selectOperator(id, plmn))
   ipcMain.handle('device:diagnose', (_, id: string) => devices.diagnose(id))

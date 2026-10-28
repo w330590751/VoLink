@@ -7,12 +7,12 @@ export function createDemoSnapshot(): AppSnapshot {
       {
         id: 'sim-ec25', name: '主卡模组', model: 'EC25-A', manufacturer: 'Quectel', displayPort: '模拟 COM3', mode: 'simulation', state: 'online', enabled: true, autoConnect: true,
         capabilities: { sms: true, voice: true, ussd: true, esim: false, vowifi: false, rawAT: true },
-        status: { signal: 92, dbm: -83, network: '5G NSA', band: 'n78', channel: '633984', operator: '中国移动', imei: '866123045678912', imsi: '460001234567890', iccid: '8986001234567890123', simState: 'READY', registration: '已注册（本地）', firmware: 'EC25EFAR06A12M4G', rsrp: -83, rsrq: -8.5, sinr: 24, packetService: 'Attached', updatedAt: now }
+        status: { signal: 92, dbm: -83, network: '5G NSA', band: 'n78', channel: '633984', operator: '中国移动', imei: '866123045678912', imsi: '460001234567890', iccid: '8986001234567890123', phoneNumber: '13800138000', simState: 'READY', registration: '已注册（本地）', firmware: 'EC25EFAR06A12M4G', rsrp: -83, rsrq: -8.5, sinr: 24, packetService: 'Attached', updatedAt: now }
       },
       {
         id: 'sim-ec20', name: '短信模组', model: 'EC20-C', manufacturer: 'Quectel', displayPort: '模拟 COM5', mode: 'simulation', state: 'online', enabled: true, autoConnect: true,
         capabilities: { sms: true, voice: true, ussd: true, esim: true, vowifi: true, rawAT: true },
-        status: { signal: 61, dbm: -101, network: '4G LTE', band: 'B3', channel: '1650', operator: '中国联通', imei: '860512040123456', imsi: '460011234567890', iccid: '8986011234567890123', simState: 'READY', registration: '已注册（本地）', firmware: 'EC20CEHCLGR08A09M1G', rsrp: -101, rsrq: -13, sinr: 8, packetService: 'Attached', updatedAt: now }
+        status: { signal: 61, dbm: -101, network: '4G LTE', band: 'B3', channel: '1650', operator: '中国联通', imei: '860512040123456', imsi: '460011234567890', iccid: '8986011234567890123', phoneNumber: '13000100000', simState: 'READY', registration: '已注册（本地）', firmware: 'EC20CEHCLGR08A09M1G', rsrp: -101, rsrq: -13, sinr: 8, packetService: 'Attached', updatedAt: now }
       }
     ],
     messages: [

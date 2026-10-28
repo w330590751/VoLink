@@ -24,6 +24,7 @@ VoLink 是一套独立实现的 Windows 蜂窝模块桌面软件。它自动发�
 | 多模块发现 | ✅ | Windows Modem + COM 自动发现、热插拔扫描、手动端口选择 |
 | SIM 与网络状态 | ✅ | 运营商、IMEI、IMSI、ICCID、注册状态和固件版本 |
 | 专业射频指标 | ✅ | CSQ、dBm、RSRP、RSRQ、SINR、LTE 频段和信道（取决于模块支持） |
+| 本机号码 | ✅ | 使用 `AT+CNUM` 自动读取；运营商未写入号码时支持手动补录 |
 | 一键设备诊断 | ✅ | 检查 AT 端口、SIM、标识读取、信号、网络注册和分组数据 |
 | 直接拨号 | ✅ | `ATD<number>;` 拨号、`ATH` 挂断、本地通话记录 |
 | 短信 | ✅ | 发送、同步、删除和本地存储，支持 GSM/UCS2 |
@@ -32,6 +33,7 @@ VoLink 是一套独立实现的 Windows 蜂窝模块桌面软件。它自动发�
 | HTTP / SOCKS5 代理 | ✅ | 多实例、认证和移动网络接口绑定 |
 | 通知 | ✅ | Telegram、飞书、QQ Bot、Bark、Email、PushPlus、Webhook |
 | 卡策略 | ✅ | APN、IP 版本、蜂窝网络和飞行模式控制 |
+| 独立流量开关 | ✅ | 使用 `AT+CGATT` 开关移动数据，不影响短信和语音射频 |
 | 在线更新检查 | ✅ | 从 GitHub Releases 查询新版本并打开安全下载地址 |
 | VoWiFi / IMS | 能力受限 | 已有策略界面；真实通话需要运营商、模块固件及独立 IMS 后端配合 |
 
@@ -75,7 +77,7 @@ npm run dev
 npm run dist
 ```
 
-输出：`release/VoLink-1.1.0-portable.exe`
+输出：`release/VoLink-1.1.1-portable.exe`
 
 ## 架构
 
