@@ -85,6 +85,9 @@ function registerIPC(current: NonNullable<typeof services>) {
   ipcMain.handle('sms:refresh', (_, deviceId: string) => sms.refresh(deviceId))
   ipcMain.handle('sms:delete', (_, id: string) => sms.delete(id))
 
+  ipcMain.handle('logs:delete', (_, id: string) => store.deleteLog(id))
+  ipcMain.handle('logs:clear', () => store.clearLogs())
+
   ipcMain.handle('call:dial', (_, deviceId: string, number: string) => calls.dial(deviceId, number))
   ipcMain.handle('call:hangup', () => calls.hangup())
   ipcMain.handle('call:status', () => calls.status())

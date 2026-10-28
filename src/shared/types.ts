@@ -265,6 +265,8 @@ export interface VoLinkAPI {
   sendSMS(deviceId: string, recipient: string, body: string): Promise<SmsMessage>
   refreshSMS(deviceId: string): Promise<SmsMessage[]>
   deleteSMS(id: string): Promise<boolean>
+  deleteLog(id: string): Promise<boolean>
+  clearLogs(): Promise<number>
   dial(deviceId: string, number: string): Promise<{ state: CallState; number: string; transport: string }>
   hangup(): Promise<{ state: CallState }>
   callStatus(): Promise<CallState>
